@@ -1,0 +1,42 @@
+resource "azurerm_virtual_network" "{{ name | replace('-', '_') }}" {
+  name                = "{{ name }}"
+  location            = "{{ location }}"
+  resource_group_name = "{{ resource_group_name }}"
+  address_space       = ["{{ address_space }}"]
+{% if tags is defined and tags %}
+
+  tags = {
+{% for key, value in tags.items() %}
+    {{ key }} = "{{ value }}"
+{% endfor %}
+  }
+{% endif %}
+}
+
+{% if subnets is defined and subnets %}
+{% for subnet in subnets %}
+resource "azurerm_subnet" "{{ subnet.name | replace('-', '_') }}" {
+  name                 = "{{ subnet.name }}"
+  resource_group_name  = "{{ resource_group_name }}"
+  virtual_network_name = azurerm_virtual_network.{{ name | replace('-', '_') }}.name
+  address_prefixes     = ["{{ subnet.address_prefix }}"]
+}
+
+{% endfor %}
+{% endif %}
+
+output "vnet_id" {
+  value = azurerm_virtual_network.{{ name | replace('-', '_') }}.id
+}
+
+output "vnet_name" {
+  value = azurerm_virtual_network.{{ name | replace('-', '_') }}.name
+}
+{% if subnets is defined and subnets %}
+{% for subnet in subnets %}
+
+output "subnet_{{ subnet.name | replace('-', '_') }}_id" {
+  value = azurerm_subnet.{{ subnet.name | replace('-', '_') }}.id
+}
+{% endfor %}
+{% endif %}

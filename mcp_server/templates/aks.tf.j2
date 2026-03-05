@@ -1,0 +1,51 @@
+resource "azurerm_kubernetes_cluster" "{{ name | replace('-', '_') }}" {
+  name                = "{{ name }}"
+  location            = "{{ location }}"
+  resource_group_name = "{{ resource_group_name }}"
+  dns_prefix          = "{{ name }}"
+{% if kubernetes_version is defined and kubernetes_version %}
+  kubernetes_version  = "{{ kubernetes_version }}"
+{% endif %}
+
+  default_node_pool {
+    name       = "default"
+    node_count = {{ node_count | default(3) }}
+    vm_size    = "{{ vm_size }}"
+{% if enable_autoscaling is defined and enable_autoscaling %}
+    enable_auto_scaling = true
+    min_count           = {{ min_node_count | default(1) }}
+    max_count           = {{ max_node_count | default(10) }}
+{% endif %}
+  }
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  network_profile {
+    network_plugin = "azure"
+    network_policy = "azure"
+  }
+{% if tags is defined and tags %}
+
+  tags = {
+{% for key, value in tags.items() %}
+    {{ key }} = "{{ value }}"
+{% endfor %}
+  }
+{% endif %}
+}
+
+output "aks_cluster_name" {
+  value = azurerm_kubernetes_cluster.{{ name | replace('-', '_') }}.name
+}
+
+output "aks_kube_config" {
+  value     = azurerm_kubernetes_cluster.{{ name | replace('-', '_') }}.kube_config_raw
+  sensitive = true
+}
+
+output "aks_host" {
+  value     = azurerm_kubernetes_cluster.{{ name | replace('-', '_') }}.kube_config[0].host
+  sensitive = true
+}

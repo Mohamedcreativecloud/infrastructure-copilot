@@ -1,0 +1,41 @@
+resource "azurerm_storage_account" "{{ name | replace('-', '_') }}" {
+  name                     = "{{ name | replace('-', '') | lower }}"
+  resource_group_name      = "{{ resource_group_name }}"
+  location                 = "{{ location }}"
+  account_tier             = "{{ account_tier | default('Standard') }}"
+  account_replication_type = "{{ account_replication_type | default('LRS') }}"
+{% if enable_https is defined %}
+  enable_https_traffic_only = {{ enable_https | default(true) | lower }}
+{% endif %}
+  min_tls_version          = "TLS1_2"
+  allow_nested_items_to_be_public = false
+
+  blob_properties {
+    versioning_enabled = true
+
+    delete_retention_policy {
+      days = 7
+    }
+  }
+{% if tags is defined and tags %}
+
+  tags = {
+{% for key, value in tags.items() %}
+    {{ key }} = "{{ value }}"
+{% endfor %}
+  }
+{% endif %}
+}
+
+output "storage_account_name" {
+  value = azurerm_storage_account.{{ name | replace('-', '_') }}.name
+}
+
+output "storage_primary_endpoint" {
+  value = azurerm_storage_account.{{ name | replace('-', '_') }}.primary_blob_endpoint
+}
+
+output "storage_primary_access_key" {
+  value     = azurerm_storage_account.{{ name | replace('-', '_') }}.primary_access_key
+  sensitive = true
+}

@@ -1,0 +1,73 @@
+resource "azurerm_public_ip" "{{ name | replace('-', '_') }}" {
+  name                = "{{ name }}-pip"
+  location            = "{{ location }}"
+  resource_group_name = "{{ resource_group_name }}"
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+resource "azurerm_network_interface" "{{ name | replace('-', '_') }}" {
+  name                = "{{ name }}-nic"
+  location            = "{{ location }}"
+  resource_group_name = "{{ resource_group_name }}"
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = var.subnet_id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = azurerm_public_ip.{{ name | replace('-', '_') }}.id
+  }
+}
+
+resource "azurerm_linux_virtual_machine" "{{ name | replace('-', '_') }}" {
+  name                = "{{ name }}"
+  location            = "{{ location }}"
+  resource_group_name = "{{ resource_group_name }}"
+  size                = "{{ vm_size }}"
+  admin_username      = "{{ admin_username }}"
+
+  network_interface_ids = [
+    azurerm_network_interface.{{ name | replace('-', '_') }}.id,
+  ]
+
+  admin_ssh_key {
+    username   = "{{ admin_username }}"
+    public_key = file("~/.ssh/id_rsa.pub")
+  }
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Premium_LRS"
+{% if os_disk_size_gb is defined and os_disk_size_gb %}
+    disk_size_gb         = {{ os_disk_size_gb }}
+{% endif %}
+  }
+
+  source_image_reference {
+    publisher = "{{ source_image_publisher | default('Canonical') }}"
+    offer     = "{{ source_image_offer | default('0001-com-ubuntu-server-jammy') }}"
+    sku       = "{{ source_image_sku | default('22_04-lts-gen2') }}"
+    version   = "latest"
+  }
+{% if tags is defined and tags %}
+
+  tags = {
+{% for key, value in tags.items() %}
+    {{ key }} = "{{ value }}"
+{% endfor %}
+  }
+{% endif %}
+}
+
+variable "subnet_id" {
+  type        = string
+  description = "Subnet ID where the VM NIC will be attached"
+}
+
+output "vm_public_ip" {
+  value = azurerm_public_ip.{{ name | replace('-', '_') }}.ip_address
+}
+
+output "vm_private_ip" {
+  value = azurerm_network_interface.{{ name | replace('-', '_') }}.private_ip_address
+}
