@@ -1,6 +1,12 @@
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
-from mcp_server.config import TEMPLATES_DIR, WORKSPACES_DIR
+from mcp_server.config import (
+    TEMPLATES_DIR,
+    WORKSPACES_DIR,
+    TFSTATE_RESOURCE_GROUP,
+    TFSTATE_STORAGE_ACCOUNT,
+    TFSTATE_CONTAINER,
+)
 
 
 SUPPORTED_RESOURCES = [
@@ -48,12 +54,14 @@ def generate_terraform(
     output_file.write_text(rendered)
 
     providers_result = _ensure_providers(workspace, params)
+    backend_result = _ensure_backend(workspace, params)
 
     return {
         "success": True,
         "file": str(output_file),
         "content": rendered,
         "providers_written": providers_result,
+        "backend_written": backend_result,
     }
 
 
@@ -65,6 +73,24 @@ def _ensure_providers(workspace: str, params: dict) -> bool:
         template = _jinja_env.get_template("providers.tf.j2")
         rendered = template.render(**params)
         providers_file.write_text(rendered)
+        return True
+    except Exception:
+        return False
+
+
+def _ensure_backend(workspace: str, params: dict) -> bool:
+    backend_file = WORKSPACES_DIR / workspace / "backend.tf"
+    if backend_file.exists():
+        return False
+    try:
+        template = _jinja_env.get_template("backend.tf.j2")
+        rendered = template.render(
+            tfstate_resource_group=TFSTATE_RESOURCE_GROUP,
+            tfstate_storage_account=TFSTATE_STORAGE_ACCOUNT,
+            tfstate_container=TFSTATE_CONTAINER,
+            workspace=workspace,
+        )
+        backend_file.write_text(rendered)
         return True
     except Exception:
         return False

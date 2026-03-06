@@ -6,6 +6,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 from mcp_server.tools import terraform, azure, generator
+from mcp_server import audit
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("infrastructure-copilot")
@@ -80,7 +81,10 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="terraform_apply",
-            description="Run 'terraform apply' to deploy infrastructure to Azure. Requires init and plan to have run first.",
+            description=(
+                "Run 'terraform apply' to deploy infrastructure to Azure. "
+                "Requires terraform_plan to have run AND approve_plan to have been called first."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -90,14 +94,33 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="terraform_destroy",
-            description="Run 'terraform destroy' to tear down all resources in a workspace.",
+            name="approve_plan",
+            description="Approve a completed terraform plan before apply can run. Call after terraform_plan job is done.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "workspace": {"type": "string", "description": "Workspace name"}
+                    "workspace": {"type": "string", "description": "Workspace name"},
+                    "job_id": {"type": "string", "description": "Job ID returned by terraform_plan"},
                 },
-                "required": ["workspace"],
+                "required": ["workspace", "job_id"],
+            },
+        ),
+        Tool(
+            name="terraform_destroy",
+            description=(
+                "DANGER: Destroys ALL resources in a workspace. THIS IS IRREVERSIBLE. "
+                "You must set confirm=true explicitly to proceed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workspace": {"type": "string", "description": "Workspace name"},
+                    "confirm": {
+                        "type": "boolean",
+                        "description": "Must be set to true to confirm destruction of all resources. THIS IS IRREVERSIBLE.",
+                    },
+                },
+                "required": ["workspace", "confirm"],
             },
         ),
         Tool(
@@ -109,6 +132,17 @@ async def list_tools() -> list[Tool]:
                     "workspace": {"type": "string", "description": "Workspace name"}
                 },
                 "required": ["workspace"],
+            },
+        ),
+        Tool(
+            name="get_job_result",
+            description="Check the result of a background terraform job (plan/apply/destroy). Poll until status is 'done'.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "string", "description": "Job ID returned by terraform_plan, terraform_apply, or terraform_destroy"}
+                },
+                "required": ["job_id"],
             },
         ),
         Tool(
@@ -128,8 +162,22 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_audit_log",
+            description="Return the most recent audit log entries (tool calls and their outcomes).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "n": {
+                        "type": "integer",
+                        "description": "Number of recent entries to return (default 50)",
+                        "default": 50,
+                    }
+                },
+            },
+        ),
+        Tool(
             name="list_azure_resources",
-            description="List Azure resources. Optionally filter by resource group.",
+            description="List Azure resources. Always prefer filtering by resource_group — listing all resources in a subscription can be very slow and return thousands of results.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -186,13 +234,46 @@ async def list_tools() -> list[Tool]:
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     try:
-        result = await asyncio.get_event_loop().run_in_executor(
-            None, _dispatch, name, arguments
-        )
+        streaming_tools = {"terraform_init", "terraform_plan", "terraform_apply", "terraform_destroy", "terraform_output"}
+
+        if name in streaming_tools:
+            async def log_callback(message: str):
+                ctx = server.request_context
+                await ctx.session.send_log_message(level="info", data=message, logger="terraform")
+
+            result = await _dispatch_async(name, arguments, log_callback)
+        else:
+            result = await asyncio.get_running_loop().run_in_executor(
+                None, _dispatch, name, arguments
+            )
+
+        success = result.get("success", True) if isinstance(result, dict) else True
+        audit.log_event(name, arguments, result if isinstance(result, dict) else {}, success)
+
         return [TextContent(type="text", text=json.dumps(result, indent=2, default=str))]
     except Exception as e:
         log.exception("Tool error: %s", name)
-        return [TextContent(type="text", text=json.dumps({"success": False, "error": str(e)}))]
+        err = {"success": False, "error": str(e)}
+        audit.log_event(name, arguments, err, False)
+        return [TextContent(type="text", text=json.dumps(err))]
+
+
+async def _dispatch_async(name: str, args: dict, log_callback):
+    match name:
+        case "terraform_init":
+            return await terraform.terraform_init_async(args["workspace"], log_callback)
+        case "terraform_plan":
+            return await terraform.terraform_plan_async(args["workspace"], log_callback)
+        case "terraform_apply":
+            return await terraform.terraform_apply_async(args["workspace"], log_callback)
+        case "terraform_destroy":
+            return await terraform.terraform_destroy_async(
+                args["workspace"],
+                confirm=args.get("confirm", False),
+                log_callback=log_callback,
+            )
+        case "terraform_output":
+            return await terraform.terraform_output_async(args["workspace"], log_callback)
 
 
 def _dispatch(name: str, args: dict):
@@ -205,20 +286,18 @@ def _dispatch(name: str, args: dict):
             )
         case "get_resource_schema":
             return generator.get_resource_schema(args["resource_type"])
-        case "terraform_init":
-            return terraform.terraform_init(args["workspace"])
-        case "terraform_plan":
-            return terraform.terraform_plan(args["workspace"])
-        case "terraform_apply":
-            return terraform.terraform_apply(args["workspace"])
-        case "terraform_destroy":
-            return terraform.terraform_destroy(args["workspace"])
+        case "approve_plan":
+            return terraform.approve_plan(args["workspace"], args["job_id"])
         case "terraform_output":
             return terraform.terraform_output(args["workspace"])
+        case "get_job_result":
+            return terraform.get_job_result(args["job_id"])
         case "list_workspaces":
             return terraform.list_workspaces()
         case "get_workspace_files":
             return terraform.get_workspace_files(args["workspace"])
+        case "get_audit_log":
+            return audit.get_recent_events(args.get("n", 50))
         case "list_azure_resources":
             return azure.list_resources(args.get("resource_group"))
         case "list_resource_groups":

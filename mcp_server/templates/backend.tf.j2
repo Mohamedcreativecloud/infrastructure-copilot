@@ -1,0 +1,8 @@
+terraform {
+  backend "azurerm" {
+    resource_group_name  = "{{ tfstate_resource_group }}"
+    storage_account_name = "{{ tfstate_storage_account }}"
+    container_name       = "{{ tfstate_container }}"
+    key                  = "{{ workspace }}/terraform.tfstate"
+  }
+}

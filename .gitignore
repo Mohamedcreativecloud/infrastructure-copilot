@@ -1,5 +1,12 @@
 # Environment
 .env
+.env.local
+
+# Logs (may contain sensitive audit data)
+logs/
+
+# Generated workspaces (runtime artifacts, not source code)
+terraform/workspaces/
 
 # Python
 __pycache__/
